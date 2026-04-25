@@ -1,8 +1,0 @@
-{
-  "task_id": "synthesize__finalize",
-  "state": "running",
-  "timestamp": "2026-04-25T08:07:07.808317+00:00",
-  "meta": {
-    "kind": "collect"
-  }
-}

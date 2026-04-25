@@ -1,8 +1,0 @@
-{
-  "task_id": "synthesize",
-  "state": "running",
-  "timestamp": "2026-04-25T09:04:05.592366+00:00",
-  "meta": {
-    "kind": "tree_reduce_materialize"
-  }
-}

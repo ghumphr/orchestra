@@ -1,6 +1,0 @@
-## infinite_context_architectures.md
-The limitation of "context windows" has been one of the primary bottlenecks in LLM utility. The recent trend in "Infinite-Context Architectures" aims to move beyond the fixed-length window of traditional Transformers, allowing models to process and reason over entire libraries of books, massive codebases, or long-running video streams without losing information.
-
-Several technical paths are being explored to achieve this. One is "Ring Attention," which distributes the attention computation across a ring of devices, allowing for massive sequence lengths through parallelization. Another is the integration of "External Memory Modules" or "RAG-native Architectures," where the model does not store everything in its active weights but can dynamically query a highly efficient, latent-space vector database.
-
-A third, more radical approach involves the evolution of "Recurrent Memory Transformers" and enhanced SSMs. These architectures maintain a "compressed state" that evolves over time, effectively acting as a long-term memory that can be updated with every new token. This allows the model to maintain "global coherence" across millions of tokens. The ultimate goal is to create a "seamless reasoning engine" that can maintain a continuous, unbroken thread of thought and context, regardless of the volume of information processed.

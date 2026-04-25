@@ -1,2 +1,0 @@
-## question.md
-Look for information on the latest and greatest trends in deep learning.

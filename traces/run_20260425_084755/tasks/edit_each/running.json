@@ -1,8 +1,0 @@
-{
-  "task_id": "edit_each",
-  "state": "running",
-  "timestamp": "2026-04-25T08:50:18.371332+00:00",
-  "meta": {
-    "kind": "map_materialize"
-  }
-}

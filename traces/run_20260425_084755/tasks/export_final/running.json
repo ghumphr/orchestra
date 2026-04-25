@@ -1,8 +1,0 @@
-{
-  "task_id": "export_final",
-  "state": "running",
-  "timestamp": "2026-04-25T08:50:18.375249+00:00",
-  "meta": {
-    "kind": "write_store"
-  }
-}
