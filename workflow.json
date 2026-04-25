@@ -1,41 +1,27 @@
 {
-  "id": "general_orchestra_demo_v11",
+  "id": "demo_v11",
   "steps": [
     {
-      "id": "read_input_docs",
+      "id": "read",
       "type": "read_documents",
-      "config": {
-        "store": "input_store",
-        "output": "inputs"
+      "store": "input_store",
+      "output": "docs"
+    },
+    {
+      "id": "run",
+      "type": "run_agent",
+      "input": "docs",
+      "output": "out",
+      "agent_config": {
+        "system": "You are a simple agent. Summarize input.",
+        "output_id": "result.md"
       }
     },
     {
-      "id": "run_general_agent",
-      "type": "reduce_documents",
-      "config": {
-        "agent": "llm_agent",
-        "input": "inputs",
-        "output": "result_docs",
-        "agent_config": {
-          "prompt_profile": "starter_general_agent",
-          "tools": ["duckduckgo_search", "fetch_url", "list_directory", "read_file", "write_file", "run_shell_command"],
-          "output_id": "starter_result.md",
-          "max_identical_duckduckgo_search_calls": 2,
-          "max_identical_fetch_url_calls": 2,
-          "max_identical_list_directory_calls": 1,
-          "max_identical_read_file_calls": 2,
-          "max_identical_write_file_calls": 5,
-          "max_identical_run_shell_command_calls": 2
-        }
-      }
-    },
-    {
-      "id": "write_result_docs",
+      "id": "write",
       "type": "write_documents",
-      "config": {
-        "input": "result_docs",
-        "store": "output_store"
-      }
+      "input": "out",
+      "store": "output_store"
     }
   ]
 }
