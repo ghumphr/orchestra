@@ -1,5 +1,5 @@
 {
-  "id": "demo_v11",
+  "id": "map_demo",
   "steps": [
     {
       "id": "read",
@@ -8,13 +8,13 @@
       "output": "docs"
     },
     {
-      "id": "run",
-      "type": "run_agent",
+      "id": "map",
+      "type": "map_agent",
       "input": "docs",
       "output": "out",
       "agent_config": {
-        "system": "You are a simple agent. Summarize input.",
-        "output_id": "result.md"
+        "system": "Summarize briefly.",
+        "output_id": "summary.md"
       }
     },
     {
