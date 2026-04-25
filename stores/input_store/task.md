@@ -1,4 +1,4 @@
-Starter task for Orchestra base runtime:
+Starter task for Orchestra v1.1 base runtime:
 
 1. Create a file named hello.txt in the workspace with a short message.
 2. Read it back.

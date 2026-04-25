@@ -3,12 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, Any, Callable
+from datetime import datetime, timezone
 import argparse
 import json
 import os
 import re
 import time
 import subprocess
+import random
+import string
 
 import httpx
 from bs4 import BeautifulSoup
@@ -25,9 +28,10 @@ class Document:
 
 class DocumentStore(Protocol):
     def list_ids(self) -> list[str]: ...
+    def exists(self, doc_id: str) -> bool: ...
     def read(self, doc_id: str) -> Document: ...
     def write(self, document: Document) -> None: ...
-    def read_all(self) -> list[Document]: ...
+    def iter_documents(self) -> list[Document]: ...
 
 
 class Agent(Protocol):
@@ -58,6 +62,8 @@ class RuntimeConfig:
     store_root: str = "./stores"
     prompt_root: str = "./prompts"
     workspace_root: str = "./workspace"
+    traces_root: str = "./traces"
+    library_root: str = "./library"
     openai_base_url: str = "http://127.0.0.1:8080/v1"
     openai_api_key: str = "dummy"
     default_model: str = "default"
@@ -67,28 +73,86 @@ class RuntimeConfig:
     max_duplicate_blocks_before_finalize: int = 2
 
 
+def make_run_id() -> str:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=4))
+    return f"run_{stamp}_{suffix}"
+
+
 class FolderDocumentStore:
-    def __init__(self, root: str | Path, extension: str = ".md") -> None:
+    def __init__(self, root: str | Path) -> None:
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
-        self.extension = extension
 
-    def _path(self, doc_id: str) -> Path:
-        return self.root / f"{doc_id}{self.extension}"
+    def _content_path(self, doc_id: str) -> Path:
+        return self.root / doc_id
+
+    def _metadata_path(self, doc_id: str) -> Path:
+        return self.root / f".{doc_id}.json"
+
+    def _now_iso(self) -> str:
+        return datetime.now(timezone.utc).isoformat()
 
     def list_ids(self) -> list[str]:
-        return sorted(p.stem for p in self.root.glob(f"*{self.extension}"))
+        ids: list[str] = []
+        for p in self.root.iterdir():
+            if not p.is_file():
+                continue
+            if p.name.startswith("."):
+                continue
+            ids.append(p.name)
+        return sorted(ids)
+
+    def exists(self, doc_id: str) -> bool:
+        return self._content_path(doc_id).exists()
 
     def read(self, doc_id: str) -> Document:
-        path = self._path(doc_id)
-        content = path.read_text(encoding="utf-8")
-        return Document(id=doc_id, content=content)
+        content_path = self._content_path(doc_id)
+        metadata_path = self._metadata_path(doc_id)
+
+        if not content_path.exists():
+            raise FileNotFoundError(f"Document not found: {content_path}")
+
+        content = content_path.read_text(encoding="utf-8")
+
+        metadata: dict[str, Any]
+        if metadata_path.exists():
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        else:
+            metadata = {"id": doc_id}
+
+        metadata.setdefault("id", doc_id)
+        return Document(id=doc_id, content=content, metadata=metadata)
 
     def write(self, document: Document) -> None:
-        path = self._path(document.id)
-        path.write_text(document.content, encoding="utf-8")
+        content_path = self._content_path(document.id)
+        metadata_path = self._metadata_path(document.id)
 
-    def read_all(self) -> list[Document]:
+        now = self._now_iso()
+        metadata = dict(document.metadata)
+        metadata["id"] = document.id
+
+        if metadata_path.exists():
+            try:
+                existing_meta = json.loads(metadata_path.read_text(encoding="utf-8"))
+            except Exception:
+                existing_meta = {}
+            metadata.setdefault("created_at", existing_meta.get("created_at", now))
+        else:
+            metadata.setdefault("created_at", now)
+
+        metadata["updated_at"] = now
+
+        content_path.parent.mkdir(parents=True, exist_ok=True)
+        metadata_path.parent.mkdir(parents=True, exist_ok=True)
+
+        content_path.write_text(document.content, encoding="utf-8")
+        metadata_path.write_text(
+            json.dumps(metadata, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    def iter_documents(self) -> list[Document]:
         return [self.read(doc_id) for doc_id in self.list_ids()]
 
 
@@ -101,6 +165,81 @@ class PromptRegistry:
         if not path.exists():
             raise FileNotFoundError(f"Prompt profile not found: {path}")
         return json.loads(path.read_text(encoding="utf-8"))
+
+
+class TraceWriter:
+    def __init__(self, traces_root: str | Path, run_id: str) -> None:
+        self.traces_root = Path(traces_root)
+        self.run_id = run_id
+        self.run_root = self.traces_root / run_id
+        self.steps_root = self.run_root / "steps"
+        self.calls_root = self.run_root / "agent_calls"
+
+        self.steps_root.mkdir(parents=True, exist_ok=True)
+        self.calls_root.mkdir(parents=True, exist_ok=True)
+
+    def write_manifest(self, manifest: dict[str, Any]) -> None:
+        path = self.run_root / "manifest.json"
+        path.write_text(
+            json.dumps(manifest, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    def write_step_record(self, step_index: int, step_id: str, record: dict[str, Any]) -> None:
+        path = self.steps_root / f"{step_index:03d}_{step_id}.json"
+        path.write_text(
+            json.dumps(record, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    def begin_agent_call(
+        self,
+        step_id: str,
+        call_index: int,
+        request: dict[str, Any],
+        system_prompt: str,
+        user_prompt: str,
+    ) -> Path:
+        call_dir = self.calls_root / step_id / f"{call_index:04d}"
+        call_dir.mkdir(parents=True, exist_ok=True)
+
+        (call_dir / "request.json").write_text(
+            json.dumps(request, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        (call_dir / "system_prompt.txt").write_text(system_prompt, encoding="utf-8")
+        (call_dir / "user_prompt.txt").write_text(user_prompt, encoding="utf-8")
+
+        return call_dir
+
+    def write_agent_response(self, call_dir: Path, response_text: str) -> None:
+        (call_dir / "response.txt").write_text(response_text, encoding="utf-8")
+
+    def write_tool_calls(self, call_dir: Path, tool_calls: list[dict[str, Any]]) -> None:
+        (call_dir / "tool_calls.json").write_text(
+            json.dumps(tool_calls, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    def write_tool_results(self, call_dir: Path, tool_results: list[dict[str, Any]]) -> None:
+        (call_dir / "tool_results.json").write_text(
+            json.dumps(tool_results, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    def write_output_docs(self, call_dir: Path, docs: list[Document]) -> None:
+        payload = [
+            {
+                "id": d.id,
+                "content": d.content,
+                "metadata": d.metadata,
+            }
+            for d in docs
+        ]
+        (call_dir / "output_docs.json").write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
 
 
 @dataclass
@@ -361,14 +500,17 @@ class OpenAIChatAgent:
         prompt_registry: PromptRegistry,
         runtime_config: RuntimeConfig,
         tool_registry: ToolRegistry,
+        trace_writer: TraceWriter,
     ) -> None:
         self.prompt_registry = prompt_registry
         self.runtime_config = runtime_config
         self.tool_registry = tool_registry
+        self.trace_writer = trace_writer
         self.client = OpenAI(
             base_url=runtime_config.openai_base_url,
             api_key=runtime_config.openai_api_key,
         )
+        self.call_counters: dict[str, int] = {}
 
     def _log(self, message: str, level: int = 1) -> None:
         if self.runtime_config.verbosity >= level:
@@ -467,6 +609,7 @@ class OpenAIChatAgent:
         output_mode = prompt_profile.get("output_mode", "single_document")
         temperature = config.get("temperature", prompt_profile.get("temperature", 0.2))
         allowed_tools = config.get("tools", prompt_profile.get("tools", []))
+        trace_step_id = config.get("_trace_step_id", "unknown_step")
 
         joined_input = "\n\n".join(
             f"[Document: {doc.id}]\n{doc.content}" for doc in documents
@@ -475,6 +618,24 @@ class OpenAIChatAgent:
 
         self._print_block("SYSTEM PROMPT", system_prompt, level=3)
         self._print_block("USER PROMPT", user_prompt, level=3, limit=20000)
+
+        self.call_counters[trace_step_id] = self.call_counters.get(trace_step_id, 0) + 1
+        call_index = self.call_counters[trace_step_id]
+
+        request_payload = {
+            "model": model,
+            "temperature": temperature,
+            "tools_enabled": allowed_tools,
+            "input_doc_ids": [d.id for d in documents],
+        }
+
+        call_dir = self.trace_writer.begin_agent_call(
+            step_id=trace_step_id,
+            call_index=call_index,
+            request=request_payload,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+        )
 
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": system_prompt},
@@ -485,6 +646,8 @@ class OpenAIChatAgent:
 
         tool_signature_counts: dict[str, int] = {}
         duplicate_block_count = 0
+        all_tool_calls: list[dict[str, Any]] = []
+        all_tool_results: list[dict[str, Any]] = []
 
         max_identical_call_counts = {
             "duckduckgo_search": int(config.get("max_identical_duckduckgo_search_calls", 2)),
@@ -494,6 +657,8 @@ class OpenAIChatAgent:
             "write_file": int(config.get("max_identical_write_file_calls", 5)),
             "run_shell_command": int(config.get("max_identical_run_shell_command_calls", 2)),
         }
+
+        final_response_text = ""
 
         for round_num in range(self.runtime_config.max_tool_rounds):
             self._log(f"\n[tool-round {round_num + 1}] model={model}", 2)
@@ -505,6 +670,9 @@ class OpenAIChatAgent:
                 temperature=temperature,
             )
 
+            if content:
+                final_response_text += content
+
             if tool_calls:
                 assistant_message: dict[str, Any] = {
                     "role": "assistant",
@@ -512,6 +680,7 @@ class OpenAIChatAgent:
                     "tool_calls": tool_calls,
                 }
                 messages.append(assistant_message)
+                all_tool_calls.extend(tool_calls)
 
                 for tc in tool_calls:
                     tool_name = tc["function"]["name"]
@@ -544,6 +713,13 @@ class OpenAIChatAgent:
                             )
                         }, ensure_ascii=False)
 
+                        result_record = {
+                            "tool_name": tool_name,
+                            "arguments": parsed_args,
+                            "result": result,
+                        }
+                        all_tool_results.append(result_record)
+
                         self._log("[TOOL RESULT PREVIEW]", 4)
                         self._log(result[:4000], 4)
 
@@ -563,14 +739,20 @@ class OpenAIChatAgent:
                                 )
                             })
 
-                            final_content, _ = self._stream_chat_completion(
+                            forced_content, _ = self._stream_chat_completion(
                                 model=model,
                                 messages=messages,
                                 tools=None,
                                 temperature=temperature,
                             )
+                            final_response_text += forced_content
+                            docs = self._documents_from_output_mode(forced_content, output_mode, documents, config)
 
-                            docs = self._documents_from_output_mode(final_content, output_mode, documents, config)
+                            self.trace_writer.write_agent_response(call_dir, final_response_text)
+                            self.trace_writer.write_tool_calls(call_dir, all_tool_calls)
+                            self.trace_writer.write_tool_results(call_dir, all_tool_results)
+                            self.trace_writer.write_output_docs(call_dir, docs)
+
                             self._log("\n--- FINAL FORCED RETURNED DOCUMENTS ---", 2)
                             for d in docs:
                                 self._log(f"[{d.id}]", 2)
@@ -589,6 +771,13 @@ class OpenAIChatAgent:
                             "message": str(e),
                         }, ensure_ascii=False)
 
+                    result_record = {
+                        "tool_name": tool_name,
+                        "arguments": parsed_args,
+                        "result": result,
+                    }
+                    all_tool_results.append(result_record)
+
                     self._log("[TOOL RESULT PREVIEW]", 4)
                     self._log(result[:4000], 4)
 
@@ -601,6 +790,11 @@ class OpenAIChatAgent:
                 continue
 
             docs = self._documents_from_output_mode(content, output_mode, documents, config)
+            self.trace_writer.write_agent_response(call_dir, final_response_text)
+            self.trace_writer.write_tool_calls(call_dir, all_tool_calls)
+            self.trace_writer.write_tool_results(call_dir, all_tool_results)
+            self.trace_writer.write_output_docs(call_dir, docs)
+
             self._log("\n--- RETURNED DOCUMENTS ---", 2)
             for d in docs:
                 self._log(f"[{d.id}]", 2)
@@ -614,14 +808,20 @@ class OpenAIChatAgent:
             "content": "No more tool calls are available in this run. Produce your best final answer now."
         })
 
-        final_content, _ = self._stream_chat_completion(
+        forced_content, _ = self._stream_chat_completion(
             model=model,
             messages=messages,
             tools=None,
             temperature=temperature,
         )
+        final_response_text += forced_content
+        docs = self._documents_from_output_mode(forced_content, output_mode, documents, config)
 
-        docs = self._documents_from_output_mode(final_content, output_mode, documents, config)
+        self.trace_writer.write_agent_response(call_dir, final_response_text)
+        self.trace_writer.write_tool_calls(call_dir, all_tool_calls)
+        self.trace_writer.write_tool_results(call_dir, all_tool_results)
+        self.trace_writer.write_output_docs(call_dir, docs)
+
         self._log("\n--- FINAL FORCED RETURNED DOCUMENTS ---", 2)
         for d in docs:
             self._log(f"[{d.id}]", 2)
@@ -637,7 +837,7 @@ class OpenAIChatAgent:
         config: dict[str, Any],
     ) -> list[Document]:
         if output_mode == "single_document":
-            output_id = config.get("output_id", f"{documents[0].id}_llm" if documents else "llm_output")
+            output_id = config.get("output_id", documents[0].id if documents else "llm_output.txt")
             return [Document(id=output_id, content=content)]
 
         if output_mode == "json_documents":
@@ -669,10 +869,14 @@ class WorkflowRunner:
         stores: dict[str, DocumentStore],
         agents: dict[str, Agent],
         runtime_config: RuntimeConfig,
+        trace_writer: TraceWriter,
+        run_id: str,
     ) -> None:
         self.stores = stores
         self.agents = agents
         self.runtime_config = runtime_config
+        self.trace_writer = trace_writer
+        self.run_id = run_id
 
     def log(self, message: str, level: int = 1) -> None:
         if self.runtime_config.verbosity >= level:
@@ -681,67 +885,108 @@ class WorkflowRunner:
     def run(self, workflow: Workflow, context: RunContext | None = None) -> RunContext:
         context = context or RunContext()
 
-        for step in workflow.steps:
-            started = time.time()
+        for step_index, step in enumerate(workflow.steps, start=1):
+            started = datetime.now(timezone.utc).isoformat()
+            wall_start = time.time()
+
             self.log(f"\n== Step: {step.id} ({step.type}) ==", 1)
 
-            if step.type == "read_documents":
-                store_name = step.config["store"]
-                output = step.config["output"]
-                docs = self.stores[store_name].read_all()
-                context.bindings[output] = docs
-                self.log(f"Read {len(docs)} documents from '{store_name}' into '{output}'", 1)
-                if self.runtime_config.verbosity >= 2:
-                    for d in docs:
-                        self.log(f"  - {d.id}", 2)
+            step_record: dict[str, Any] = {
+                "step_index": step_index,
+                "step_id": step.id,
+                "step_type": step.type,
+                "started_at": started,
+                "status": "ok",
+            }
 
-            elif step.type == "write_documents":
-                input_name = step.config["input"]
-                store_name = step.config["store"]
-                docs = context.bindings[input_name]
-                for doc in docs:
-                    self.stores[store_name].write(doc)
-                self.log(f"Wrote {len(docs)} documents from '{input_name}' to '{store_name}'", 1)
-                if self.runtime_config.verbosity >= 2:
-                    for d in docs:
-                        self.log(f"  - {d.id}", 2)
+            try:
+                if step.type == "read_documents":
+                    store_name = step.config["store"]
+                    output = step.config["output"]
+                    docs = self.stores[store_name].iter_documents()
+                    context.bindings[output] = docs
+                    self.log(f"Read {len(docs)} documents from '{store_name}' into '{output}'", 1)
+                    if self.runtime_config.verbosity >= 2:
+                        for d in docs:
+                            self.log(f"  - {d.id}", 2)
 
-            elif step.type == "run_agent":
-                agent_name = step.config["agent"]
-                input_name = step.config["input"]
-                output = step.config["output"]
-                agent_config = step.config.get("agent_config", {})
-                docs = context.bindings[input_name]
-                self.log(f"Running agent '{agent_name}' on binding '{input_name}' with {len(docs)} docs", 1)
-                if self.runtime_config.verbosity >= 2:
-                    for d in docs:
-                        self.log(f"  input doc: {d.id}", 2)
-                result = self.agents[agent_name].execute(docs, agent_config)
-                context.bindings[output] = result
-                self.log(f"Agent '{agent_name}' produced {len(result)} docs into '{output}'", 1)
-                if self.runtime_config.verbosity >= 2:
-                    for d in result:
-                        self.log(f"  output doc: {d.id}", 2)
+                    step_record["input_store"] = store_name
+                    step_record["binding"] = output
+                    step_record["processed_ids"] = [d.id for d in docs]
 
-            elif step.type == "reduce_documents":
-                agent_name = step.config["agent"]
-                input_name = step.config["input"]
-                output = step.config["output"]
-                agent_config = step.config.get("agent_config", {})
-                docs = context.bindings[input_name]
-                self.log(f"Reducing {len(docs)} docs from '{input_name}' via '{agent_name}'", 1)
-                result = self.agents[agent_name].execute(docs, agent_config)
-                context.bindings[output] = result
-                self.log(f"Reduce agent '{agent_name}' produced {len(result)} docs into '{output}'", 1)
-                if self.runtime_config.verbosity >= 2:
-                    for d in result:
-                        self.log(f"  output doc: {d.id}", 2)
+                elif step.type == "write_documents":
+                    input_name = step.config["input"]
+                    store_name = step.config["store"]
+                    docs = context.bindings[input_name]
+                    for doc in docs:
+                        self.stores[store_name].write(doc)
+                    self.log(f"Wrote {len(docs)} documents from '{input_name}' to '{store_name}'", 1)
+                    if self.runtime_config.verbosity >= 2:
+                        for d in docs:
+                            self.log(f"  - {d.id}", 2)
 
-            else:
-                raise ValueError(f"Unknown step type: {step.type}")
+                    step_record["output_store"] = store_name
+                    step_record["processed_ids"] = [d.id for d in docs]
 
-            elapsed = time.time() - started
+                elif step.type == "run_agent":
+                    agent_name = step.config["agent"]
+                    input_name = step.config["input"]
+                    output = step.config["output"]
+                    agent_config = dict(step.config.get("agent_config", {}))
+                    agent_config["_trace_step_id"] = step.id
+                    docs = context.bindings[input_name]
+                    self.log(f"Running agent '{agent_name}' on binding '{input_name}' with {len(docs)} docs", 1)
+                    if self.runtime_config.verbosity >= 2:
+                        for d in docs:
+                            self.log(f"  input doc: {d.id}", 2)
+                    result = self.agents[agent_name].execute(docs, agent_config)
+                    context.bindings[output] = result
+                    self.log(f"Agent '{agent_name}' produced {len(result)} docs into '{output}'", 1)
+                    if self.runtime_config.verbosity >= 2:
+                        for d in result:
+                            self.log(f"  output doc: {d.id}", 2)
+
+                    step_record["input_binding"] = input_name
+                    step_record["output_binding"] = output
+                    step_record["processed_ids"] = [d.id for d in docs]
+                    step_record["produced_ids"] = [d.id for d in result]
+
+                elif step.type == "reduce_documents":
+                    agent_name = step.config["agent"]
+                    input_name = step.config["input"]
+                    output = step.config["output"]
+                    agent_config = dict(step.config.get("agent_config", {}))
+                    agent_config["_trace_step_id"] = step.id
+                    docs = context.bindings[input_name]
+                    self.log(f"Reducing {len(docs)} docs from '{input_name}' via '{agent_name}'", 1)
+                    result = self.agents[agent_name].execute(docs, agent_config)
+                    context.bindings[output] = result
+                    self.log(f"Reduce agent '{agent_name}' produced {len(result)} docs into '{output}'", 1)
+                    if self.runtime_config.verbosity >= 2:
+                        for d in result:
+                            self.log(f"  output doc: {d.id}", 2)
+
+                    step_record["input_binding"] = input_name
+                    step_record["output_binding"] = output
+                    step_record["processed_ids"] = [d.id for d in docs]
+                    step_record["produced_ids"] = [d.id for d in result]
+
+                else:
+                    raise ValueError(f"Unknown step type: {step.type}")
+
+            except Exception as e:
+                step_record["status"] = "error"
+                step_record["error"] = str(e)
+                step_record["ended_at"] = datetime.now(timezone.utc).isoformat()
+                self.trace_writer.write_step_record(step_index, step.id, step_record)
+                raise
+
+            elapsed = time.time() - wall_start
             self.log(f"[step time] {elapsed:.2f}s", 1)
+
+            step_record["ended_at"] = datetime.now(timezone.utc).isoformat()
+            step_record["elapsed_seconds"] = elapsed
+            self.trace_writer.write_step_record(step_index, step.id, step_record)
 
         return context
 
@@ -760,6 +1005,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--store-root")
     parser.add_argument("--prompt-root")
     parser.add_argument("--workspace-root")
+    parser.add_argument("--traces-root")
+    parser.add_argument("--library-root")
     parser.add_argument("--openai-base-url")
     parser.add_argument("--openai-api-key")
     parser.add_argument("--model", dest="default_model")
@@ -797,6 +1044,8 @@ def load_runtime_config() -> RuntimeConfig:
         store_root=resolve("store_root", "ORCHESTRA_STORE_ROOT", "./stores"),
         prompt_root=resolve("prompt_root", "ORCHESTRA_PROMPT_ROOT", "./prompts"),
         workspace_root=resolve("workspace_root", "ORCHESTRA_WORKSPACE_ROOT", "./workspace"),
+        traces_root=resolve("traces_root", "ORCHESTRA_TRACES_ROOT", "./traces"),
+        library_root=resolve("library_root", "ORCHESTRA_LIBRARY_ROOT", "./library"),
         openai_base_url=resolve("openai_base_url", "OPENAI_BASE_URL", "http://127.0.0.1:8080/v1"),
         openai_api_key=resolve("openai_api_key", "OPENAI_API_KEY", "dummy"),
         default_model=resolve("default_model", "ORCHESTRA_DEFAULT_MODEL", "default"),
@@ -805,10 +1054,11 @@ def load_runtime_config() -> RuntimeConfig:
     )
 
 
-def build_store_map(store_root: str) -> dict[str, DocumentStore]:
+def build_store_map(store_root: str) -> dict[str, FolderDocumentStore]:
     root = Path(store_root)
     root.mkdir(parents=True, exist_ok=True)
-    stores: dict[str, DocumentStore] = {}
+
+    stores: dict[str, FolderDocumentStore] = {}
     for child in root.iterdir():
         if child.is_dir():
             stores[child.name] = FolderDocumentStore(child)
@@ -817,28 +1067,64 @@ def build_store_map(store_root: str) -> dict[str, DocumentStore]:
 
 def main() -> None:
     runtime_config = load_runtime_config()
+
     Path(runtime_config.workspace_root).mkdir(parents=True, exist_ok=True)
+    Path(runtime_config.traces_root).mkdir(parents=True, exist_ok=True)
+    Path(runtime_config.library_root).mkdir(parents=True, exist_ok=True)
+
+    run_id = make_run_id()
+    trace_writer = TraceWriter(runtime_config.traces_root, run_id)
 
     print("Runtime config:")
     print(f"  workflow_path={runtime_config.workflow_path}")
     print(f"  store_root={runtime_config.store_root}")
     print(f"  prompt_root={runtime_config.prompt_root}")
     print(f"  workspace_root={runtime_config.workspace_root}")
+    print(f"  traces_root={runtime_config.traces_root}")
+    print(f"  library_root={runtime_config.library_root}")
     print(f"  openai_base_url={runtime_config.openai_base_url}")
     print(f"  default_model={runtime_config.default_model}")
     print(f"  verbosity={runtime_config.verbosity}")
+    print(f"  run_id={run_id}")
+
+    manifest = {
+        "run_id": run_id,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "workflow_path": runtime_config.workflow_path,
+        "store_root": runtime_config.store_root,
+        "prompt_root": runtime_config.prompt_root,
+        "workspace_root": runtime_config.workspace_root,
+        "traces_root": runtime_config.traces_root,
+        "library_root": runtime_config.library_root,
+        "openai_base_url": runtime_config.openai_base_url,
+        "default_model": runtime_config.default_model,
+        "verbosity": runtime_config.verbosity,
+    }
+    trace_writer.write_manifest(manifest)
 
     prompt_registry = PromptRegistry(runtime_config.prompt_root)
     stores = build_store_map(runtime_config.store_root)
     tool_registry = make_tools(runtime_config)
 
     agents = {
-        "llm_agent": OpenAIChatAgent(prompt_registry, runtime_config, tool_registry),
+        "llm_agent": OpenAIChatAgent(prompt_registry, runtime_config, tool_registry, trace_writer),
     }
 
     workflow = load_workflow(runtime_config.workflow_path)
-    runner = WorkflowRunner(stores=stores, agents=agents, runtime_config=runtime_config)
+    manifest["workflow_id"] = workflow.id
+    trace_writer.write_manifest(manifest)
+
+    runner = WorkflowRunner(
+        stores=stores,
+        agents=agents,
+        runtime_config=runtime_config,
+        trace_writer=trace_writer,
+        run_id=run_id,
+    )
     context = runner.run(workflow)
+
+    manifest["ended_at"] = datetime.now(timezone.utc).isoformat()
+    trace_writer.write_manifest(manifest)
 
     print(f"\nWorkflow complete: {workflow.id}")
     print("Bindings:")

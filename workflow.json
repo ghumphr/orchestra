@@ -1,5 +1,5 @@
 {
-  "id": "general_orchestra_demo",
+  "id": "general_orchestra_demo_v11",
   "steps": [
     {
       "id": "read_input_docs",
@@ -19,7 +19,7 @@
         "agent_config": {
           "prompt_profile": "starter_general_agent",
           "tools": ["duckduckgo_search", "fetch_url", "list_directory", "read_file", "write_file", "run_shell_command"],
-          "output_id": "starter_result",
+          "output_id": "starter_result.md",
           "max_identical_duckduckgo_search_calls": 2,
           "max_identical_fetch_url_calls": 2,
           "max_identical_list_directory_calls": 1,
