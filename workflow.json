@@ -1,48 +1,63 @@
 {
   "id": "deep_learning_2026_massive_synthesis",
-  "steps": [
+  "nodes": [
     {
-      "id": "step1_init",
-      "type": "read_documents",
+      "id": "mission_in",
+      "kind": "read_store",
       "store": "input_store",
-      "output": "mission"
+      "bind": "mission"
     },
     {
-      "id": "step2_gather_articles",
-      "type": "run_agent",
+      "id": "scout",
+      "kind": "agent",
       "input": "mission",
-      "output": "scouted_articles",
+      "bind": "raw_scout_packet",
       "agent_config": {
         "system": "You are a specialized Research Scout. 1. Call `get_context` to confirm today's date in 2026. 2. Use `duckduckgo_search` and `fetch_url` to identify 12-15 distinct, high-impact trends or papers in Deep Learning from 2025 and 2026. 3. For every trend found, you MUST produce a separate technical summary (approx 300 words). 4. Format your output as a stream of documents using exactly this syntax for each: ---DOC:article_name.md--- followed by the content on a new line. Do NOT provide any intro or outro text. Only the documents."
-      }
+      },
+      "deps": ["mission_in"]
     },
     {
-      "id": "step3_persist_to_comm_store",
-      "type": "write_documents",
-      "input": "scouted_articles",
-      "store": "research_store"
-    },
-    {
-      "id": "step4_load_for_synthesis",
-      "type": "read_documents",
+      "id": "persist_research",
+      "kind": "write_store",
+      "input": "raw_scout_packet",
       "store": "research_store",
-      "output": "article_pool"
+      "deps": ["scout"]
     },
     {
-      "id": "step5_balanced_tree_reduce",
-      "type": "tree_reduce",
+      "id": "research_in",
+      "kind": "read_store",
+      "store": "research_store",
+      "bind": "article_pool",
+      "deps": ["persist_research"]
+    },
+    {
+      "id": "edit_each",
+      "kind": "map",
       "input": "article_pool",
-      "output": "final_report_list",
+      "bind": "edited_sections",
       "agent_config": {
-        "system": "You are a Technical Editor. You will be given two Deep Learning research summaries. Your task is to merge them into a single, cohesive, and highly professional report section. Maintain technical terminology and ensure the 2026 context is preserved. Do not lose specific data points from either document.",
-        "output_id": "Master_DL_Report_2026.md"
-      }
+        "system": "You are a technical editor. Improve clarity and structure without removing important technical facts."
+      },
+      "deps": ["research_in"]
     },
     {
-      "id": "step6_export_final",
-      "type": "write_documents",
+      "id": "synthesize",
+      "kind": "tree_reduce",
+      "input": "edited_sections",
+      "bind": "final_report_list",
+      "agent_config": {
+        "system": "You are a Technical Editor. You will be given two Deep Learning research summaries. Merge them into a single cohesive professional report section. Preserve technical detail and the 2026 context.",
+        "output_id": "Master_DL_Report_2026.md"
+      },
+      "deps": ["edit_each"]
+    },
+    {
+      "id": "export_final",
+      "kind": "write_store",
       "input": "final_report_list",
-      "store": "output_store"
+      "store": "output_store",
+      "deps": ["synthesize"]
     }
   ]
 }
