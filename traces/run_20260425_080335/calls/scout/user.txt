@@ -1,0 +1,2 @@
+## mission.md
+Research and synthesize the most important deep learning trends and papers from 2025 and 2026.

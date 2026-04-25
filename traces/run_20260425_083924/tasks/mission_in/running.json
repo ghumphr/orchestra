@@ -1,0 +1,8 @@
+{
+  "task_id": "mission_in",
+  "state": "running",
+  "timestamp": "2026-04-25T08:39:24.827942+00:00",
+  "meta": {
+    "kind": "read_store"
+  }
+}

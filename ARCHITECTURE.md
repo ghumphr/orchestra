@@ -7,7 +7,7 @@ Orchestra is built on a strict decoupling of:
 - **Orchestration**: task compilation, dependency tracking, scheduling, persistence
 - **Labor**: agent execution on bounded inputs
 
-The framework does **not** iterate through a workflow with an instruction pointer. Instead, it compiles the workflow into a directed acyclic graph (DAG) of concrete tasks and executes each task when its dependencies are satisfied.
+The framework does **not** iterate through a workflow with an instruction pointer. Instead, it compiles the workflow into an initial set of tasks and then lets a dependency-aware scheduler expand and execute the graph dynamically.
 
 ## 2. Core Model
 
@@ -15,12 +15,12 @@ The framework does **not** iterate through a workflow with an instruction pointe
 A workflow is a declarative description of intended work.
 
 ### Task Graph
-The framework compiles the workflow into concrete tasks:
+The framework manages concrete tasks:
 - read tasks
 - agent tasks
 - write tasks
 - map item tasks
-- reduction tasks
+- pairwise reduction tasks
 - seed, alias, and collect tasks for dynamic expansion
 
 ### Scheduler
@@ -30,6 +30,7 @@ The scheduler owns execution:
 - executes ready tasks
 - records outputs
 - unlocks dependents
+- rewires downstream dependencies when dynamic patterns materialize into concrete finalization tasks
 
 ## 3. Infrastructure: Workspace vs. Stores
 
@@ -59,7 +60,7 @@ They do **not** know:
 
 ## 5. Pattern Expansion
 
-Patterns are compile-time or schedule-time conveniences, not runtime control loops.
+Patterns are dynamic expansion primitives, not runtime control loops.
 
 ### Map
 A map node is materialized into:
@@ -82,9 +83,12 @@ A task may begin only when:
 - all upstream dependencies completed successfully
 - all required inputs are present
 
+Dynamic pattern nodes initially appear as planner tasks. Once they materialize concrete work, downstream tasks are rewired to depend on the pattern's finalization task rather than the planner task itself.
+
 This allows:
 - fan-out
 - fan-in
+- dynamic task insertion
 - partial recomputation
 - future parallel execution
 
@@ -100,7 +104,8 @@ Agents may call `get_context` to discover the current project reality rather tha
 2. Compile spec into initial tasks
 3. Seed scheduler with tasks that have no unmet dependencies
 4. When a materializer task becomes ready, expand it into concrete tasks
-5. Execute ready concrete tasks
-6. Persist outputs and mark tasks complete
-7. Unlock downstream tasks
-8. Continue until all reachable tasks finish
+5. Rewire pre-existing downstream dependencies to the materialized finalization task
+6. Execute ready concrete tasks
+7. Persist outputs and mark tasks complete
+8. Unlock downstream tasks
+9. Continue until all reachable tasks finish

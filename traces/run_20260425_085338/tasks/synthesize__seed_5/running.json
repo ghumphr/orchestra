@@ -1,0 +1,8 @@
+{
+  "task_id": "synthesize__seed_5",
+  "state": "running",
+  "timestamp": "2026-04-25T09:04:05.598995+00:00",
+  "meta": {
+    "kind": "seed"
+  }
+}

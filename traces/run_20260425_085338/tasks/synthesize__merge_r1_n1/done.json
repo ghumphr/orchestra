@@ -1,0 +1,8 @@
+{
+  "task_id": "synthesize__merge_r1_n1",
+  "state": "done",
+  "timestamp": "2026-04-25T09:12:39.277322+00:00",
+  "meta": {
+    "kind": "agent_pair_merge"
+  }
+}

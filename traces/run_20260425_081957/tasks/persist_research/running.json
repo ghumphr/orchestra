@@ -1,0 +1,8 @@
+{
+  "task_id": "persist_research",
+  "state": "running",
+  "timestamp": "2026-04-25T08:22:57.542990+00:00",
+  "meta": {
+    "kind": "write_store"
+  }
+}

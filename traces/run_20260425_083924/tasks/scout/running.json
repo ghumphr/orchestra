@@ -1,0 +1,8 @@
+{
+  "task_id": "scout",
+  "state": "running",
+  "timestamp": "2026-04-25T08:39:24.828416+00:00",
+  "meta": {
+    "kind": "agent"
+  }
+}
