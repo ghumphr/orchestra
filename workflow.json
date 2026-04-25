@@ -1,26 +1,47 @@
 {
-  "id": "map_demo",
+  "id": "deep_learning_2026_massive_synthesis",
   "steps": [
     {
-      "id": "read",
+      "id": "step1_init",
       "type": "read_documents",
       "store": "input_store",
-      "output": "docs"
+      "output": "mission"
     },
     {
-      "id": "map",
-      "type": "map_agent",
-      "input": "docs",
-      "output": "out",
+      "id": "step2_gather_articles",
+      "type": "run_agent",
+      "input": "mission",
+      "output": "scouted_articles",
       "agent_config": {
-        "system": "Summarize briefly.",
-        "output_id": "summary.md"
+        "system": "You are a specialized Research Scout. 1. Call `get_context` to confirm today's date in 2026. 2. Use `duckduckgo_search` and `fetch_url` to identify 12-15 distinct, high-impact trends or papers in Deep Learning from 2025 and 2026. 3. For every trend found, you MUST produce a separate technical summary (approx 300 words). 4. Format your output as a stream of documents using exactly this syntax for each: ---DOC:article_name.md--- followed by the content on a new line. Do NOT provide any intro or outro text. Only the documents."
       }
     },
     {
-      "id": "write",
+      "id": "step3_persist_to_comm_store",
       "type": "write_documents",
-      "input": "out",
+      "input": "scouted_articles",
+      "store": "research_store"
+    },
+    {
+      "id": "step4_load_for_synthesis",
+      "type": "read_documents",
+      "store": "research_store",
+      "output": "article_pool"
+    },
+    {
+      "id": "step5_balanced_tree_reduce",
+      "type": "tree_reduce",
+      "input": "article_pool",
+      "output": "final_report_list",
+      "agent_config": {
+        "system": "You are a Technical Editor. You will be given two Deep Learning research summaries. Your task is to merge them into a single, cohesive, and highly professional report section. Maintain technical terminology and ensure the 2026 context is preserved. Do not lose specific data points from either document.",
+        "output_id": "Master_DL_Report_2026.md"
+      }
+    },
+    {
+      "id": "step6_export_final",
+      "type": "write_documents",
+      "input": "final_report_list",
       "store": "output_store"
     }
   ]
