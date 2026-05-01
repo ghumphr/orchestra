@@ -6,14 +6,14 @@
       "kind": "map",
       "input_stores": ["mission_store"],
       "output_store": "candidate_link_store",
-      "prompt": "You are a search agent. Read the mission and perform broad web research. Generate promising links, paper titles, and short reasons they may be worth expanding. Prefer primary sources where possible. Search broadly enough to cover major relevant themes."
+      "prompt": "You are a search agent. Today is {{ now }}.\n\nUse your web search tools to look for links that will support the mission provided below.\n\nCRITICAL: For every relevant link you find, use the 'send_memo' tool to submit it individually. \n- Use the page title as the 'title'.\n- Put the URL and a short description in the 'content'.\n\nDo not provide a list of links in your final response; only use the tool.\n\nMISSION:\n{{ docs[0].content }}"
     },
     {
       "id": "judge_links",
       "kind": "transform",
       "input_stores": ["candidate_link_store"],
       "output_store": "accepted_link_store",
-      "prompt": "You are a link judge. Decide whether this candidate link is worth expanding for the mission. Keep only links that are likely to contribute meaningful information. Rewrite accepted items as concise standalone source records. If the item is weak, irrelevant, redundant, or low-value, return an empty response.",
+      "prompt": "You are a link judge. Decide whether the candidate link below is worth expanding for the mission.\n\nKeep only links that are likely to contribute meaningful information. Rewrite accepted items as concise standalone source records. If the item is weak, return an empty response.\n\nCANDIDATE LINK:\n{{ docs[0].content }}",
       "deps": ["search_links"]
     },
     {
@@ -21,7 +21,7 @@
       "kind": "transform",
       "input_stores": ["accepted_link_store"],
       "output_store": "raw_source_store",
-      "prompt": "You are a source downloader and normalizer. Using the source record, fetch the referenced page if possible and rewrite the result into a raw source document that preserves the URL, title, and the most relevant text for the mission.",
+      "prompt": "You are a source downloader. Using the source record below, fetch the referenced page and rewrite the result into a raw source document.\n\nSOURCE RECORD:\n{{ docs[0].content }}",
       "deps": ["judge_links"]
     },
     {
@@ -29,7 +29,7 @@
       "kind": "filter_store",
       "input_stores": ["raw_source_store"],
       "output_store": "useful_source_store",
-      "prompt": "You are a source triage judge. Read only the provided opening chunk of the source and decide whether the full source appears genuinely worth keeping for the mission. Reply with KEEP or DROP on the first line. You may include a short reason after that, but the first line must begin with KEEP or DROP.",
+      "prompt": "You are a source triage judge. Read the opening chunk and decide whether the full source appears genuinely worth keeping.\n\nReply with KEEP or DROP on the first line.\n\nSOURCE OPENING:\n{{ docs[0].content }}",
       "chunk_size": 2000,
       "deps": ["download_sources"]
     },
@@ -38,7 +38,7 @@
       "kind": "chunk_map",
       "input_stores": ["useful_source_store"],
       "output_store": "chunk_store",
-      "prompt": "You are a chunk normalizer. Rewrite this chunk into a clean standalone chunk document that preserves important source details and technical content needed for downstream extraction.",
+      "prompt": "You are a chunk normalizer. Rewrite this chunk into a clean standalone document. \n\nSOURCE ID: {{ docs[0].metadata.source_id }}\n\nCHUNK CONTENT:\n{{ docs[0].content }}",
       "chunk_size": 4000,
       "chunk_overlap": 300,
       "deps": ["judge_source_opening"]
@@ -48,17 +48,8 @@
       "kind": "transform",
       "input_stores": ["chunk_store"],
       "output_store": "extraction_store",
-      "prompt": "Extract the important technical claims, methods, evidence, results, and implications from this chunk in raw text. Preserve concrete details.",
+      "prompt": "Extract the important technical claims, methods, evidence, results, and implications from this chunk in raw text.\n\nCONTENT:\n{{ docs[0].content }}",
       "deps": ["chunk_sources"]
-    },
-    {
-      "id": "judge_research_sufficiency",
-      "kind": "reduce",
-      "input_stores": ["extraction_store"],
-      "output_store": "sufficiency_store",
-      "bind": "research_sufficiency",
-      "reduce_prompt": "Merge these two extraction notes into one combined research sufficiency assessment. Preserve what is already known, identify missing coverage, and judge whether the current research appears sufficient to write the final report.",
-      "deps": ["extract_chunks"]
     },
     {
       "id": "merge_information",
@@ -66,7 +57,7 @@
       "input_stores": ["extraction_store"],
       "output_store": "information_store",
       "bind": "information_document",
-      "reduce_prompt": "Merge these two extraction notes into one cohesive information document. Preserve concrete details, evidence, terminology, and distinctions between themes.",
+      "reduce_prompt": "Merge these two extraction notes into one cohesive information document.\n\nNOTE 1:\n{{ docs[0].content }}\n\nNOTE 2:\n{{ docs[1].content }}",
       "deps": ["extract_chunks"]
     },
     {
@@ -75,7 +66,7 @@
       "input_stores": ["information_store"],
       "output_store": "report_store",
       "bind": "final_report",
-      "prompt": "Write the final report using this information document. Produce a clear, well-structured, professional report that preserves technical detail and evidence.",
+      "prompt": "Write a final report using the provided information document.\n\nINFORMATION DOCUMENT:\n{{ docs[0].content }}",
       "deps": ["merge_information"]
     },
     {
