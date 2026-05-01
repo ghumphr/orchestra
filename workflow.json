@@ -1,63 +1,89 @@
 {
-  "id": "deep_learning_2026_massive_synthesis",
+  "id": "research_loop_to_report",
   "nodes": [
     {
-      "id": "mission_in",
-      "kind": "read_store",
-      "store": "input_store",
-      "bind": "mission"
-    },
-    {
-      "id": "scout",
-      "kind": "agent",
-      "input": "mission",
-      "bind": "raw_scout_packet",
-      "agent_config": {
-        "system": "You are a specialized Research Scout. 1. Call `get_context` to confirm today's date in 2026. 2. Use `duckduckgo_search` and `fetch_url` to identify 12-15 distinct, high-impact trends or papers in Deep Learning from 2025 and 2026. 3. For every trend found, you MUST produce a separate technical summary (approx 300 words). 4. Format your output as a stream of documents using exactly this syntax for each: ---DOC:article_name.md--- followed by the content on a new line. Do NOT provide any intro or outro text. Only the documents."
-      },
-      "deps": ["mission_in"]
-    },
-    {
-      "id": "persist_research",
-      "kind": "write_store",
-      "input": "raw_scout_packet",
-      "store": "research_store",
-      "deps": ["scout"]
-    },
-    {
-      "id": "research_in",
-      "kind": "read_store",
-      "store": "research_store",
-      "bind": "article_pool",
-      "deps": ["persist_research"]
-    },
-    {
-      "id": "edit_each",
+      "id": "search_links",
       "kind": "map",
-      "input": "article_pool",
-      "bind": "edited_sections",
-      "agent_config": {
-        "system": "You are a technical editor. Improve clarity and structure without removing important technical facts."
-      },
-      "deps": ["research_in"]
+      "input_stores": ["mission_store"],
+      "output_store": "candidate_link_store",
+      "prompt": "You are a search agent. Read the mission and perform broad web research. Generate promising links, paper titles, and short reasons they may be worth expanding. Prefer primary sources where possible. Search broadly enough to cover major relevant themes."
     },
     {
-      "id": "synthesize",
-      "kind": "tree_reduce",
-      "input": "edited_sections",
-      "bind": "final_report_list",
-      "agent_config": {
-        "system": "You are a Technical Editor. You will be given two Deep Learning research summaries. Merge them into a single cohesive professional report section. Preserve technical detail and the 2026 context.",
-        "output_id": "Master_DL_Report_2026.md"
-      },
-      "deps": ["edit_each"]
+      "id": "judge_links",
+      "kind": "transform",
+      "input_stores": ["candidate_link_store"],
+      "output_store": "accepted_link_store",
+      "prompt": "You are a link judge. Decide whether this candidate link is worth expanding for the mission. Keep only links that are likely to contribute meaningful information. Rewrite accepted items as concise standalone source records. If the item is weak, irrelevant, redundant, or low-value, return an empty response.",
+      "deps": ["search_links"]
     },
     {
-      "id": "export_final",
+      "id": "download_sources",
+      "kind": "transform",
+      "input_stores": ["accepted_link_store"],
+      "output_store": "raw_source_store",
+      "prompt": "You are a source downloader and normalizer. Using the source record, fetch the referenced page if possible and rewrite the result into a raw source document that preserves the URL, title, and the most relevant text for the mission.",
+      "deps": ["judge_links"]
+    },
+    {
+      "id": "judge_source_opening",
+      "kind": "filter_store",
+      "input_stores": ["raw_source_store"],
+      "output_store": "useful_source_store",
+      "prompt": "You are a source triage judge. Read only the provided opening chunk of the source and decide whether the full source appears genuinely worth keeping for the mission. Reply with KEEP or DROP on the first line. You may include a short reason after that, but the first line must begin with KEEP or DROP.",
+      "chunk_size": 2000,
+      "deps": ["download_sources"]
+    },
+    {
+      "id": "chunk_sources",
+      "kind": "chunk_map",
+      "input_stores": ["useful_source_store"],
+      "output_store": "chunk_store",
+      "prompt": "You are a chunk normalizer. Rewrite this chunk into a clean standalone chunk document that preserves important source details and technical content needed for downstream extraction.",
+      "chunk_size": 4000,
+      "chunk_overlap": 300,
+      "deps": ["judge_source_opening"]
+    },
+    {
+      "id": "extract_chunks",
+      "kind": "transform",
+      "input_stores": ["chunk_store"],
+      "output_store": "extraction_store",
+      "prompt": "Extract the important technical claims, methods, evidence, results, and implications from this chunk in raw text. Preserve concrete details.",
+      "deps": ["chunk_sources"]
+    },
+    {
+      "id": "judge_research_sufficiency",
+      "kind": "reduce",
+      "input_stores": ["extraction_store"],
+      "output_store": "sufficiency_store",
+      "bind": "research_sufficiency",
+      "reduce_prompt": "Merge these two extraction notes into one combined research sufficiency assessment. Preserve what is already known, identify missing coverage, and judge whether the current research appears sufficient to write the final report.",
+      "deps": ["extract_chunks"]
+    },
+    {
+      "id": "merge_information",
+      "kind": "reduce",
+      "input_stores": ["extraction_store"],
+      "output_store": "information_store",
+      "bind": "information_document",
+      "reduce_prompt": "Merge these two extraction notes into one cohesive information document. Preserve concrete details, evidence, terminology, and distinctions between themes.",
+      "deps": ["extract_chunks"]
+    },
+    {
+      "id": "write_report",
+      "kind": "transform",
+      "input_stores": ["information_store"],
+      "output_store": "report_store",
+      "bind": "final_report",
+      "prompt": "Write the final report using this information document. Produce a clear, well-structured, professional report that preserves technical detail and evidence.",
+      "deps": ["merge_information"]
+    },
+    {
+      "id": "export_report",
       "kind": "write_store",
-      "input": "final_report_list",
-      "store": "output_store",
-      "deps": ["synthesize"]
+      "input": "final_report",
+      "output_store": "output_store",
+      "deps": ["write_report"]
     }
   ]
 }

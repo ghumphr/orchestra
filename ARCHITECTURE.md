@@ -1,111 +1,342 @@
 # ARCHITECTURE.md: The Orchestra Framework
 
-## 1. Philosophy: Scheduling, Not Stepping
+## 1. Purpose
 
-Orchestra is built on a strict decoupling of:
+Orchestra is a workflow engine for document-oriented reasoning systems.
 
-- **Orchestration**: task compilation, dependency tracking, scheduling, persistence
-- **Labor**: agent execution on bounded inputs
+It is designed to coordinate:
 
-The framework does **not** iterate through a workflow with an instruction pointer. Instead, it compiles the workflow into an initial set of tasks and then lets a dependency-aware scheduler expand and execute the graph dynamically.
+- persistent document collections
+- bounded agent work
+- dependency-aware scheduling
+- explicit transformation stages
+- pairwise synthesis
 
-## 2. Core Model
+The framework is meant to remain agnostic to any particular workflow domain. Research, code analysis, planning, evaluation, summarization, and other workflows should all be expressible using the same core execution model.
 
-### Workflow Spec
-A workflow is a declarative description of intended work.
+---
 
-### Task Graph
-The framework manages concrete tasks:
-- read tasks
-- agent tasks
-- write tasks
-- map item tasks
-- pairwise reduction tasks
-- seed, alias, and collect tasks for dynamic expansion
+## 2. Separation of Concerns
 
-### Scheduler
-The scheduler owns execution:
-- tracks task states
-- determines which tasks are ready
-- executes ready tasks
-- records outputs
-- unlocks dependents
-- rewires downstream dependencies when dynamic patterns materialize into concrete finalization tasks
+Orchestra separates **orchestration** from **labor**.
 
-## 3. Infrastructure: Workspace vs. Stores
+### Orchestration
+The framework is responsible for:
 
-### Workspace
-- Raw filesystem
-- Used by tools and agents for side-effectful labor
-- Not managed as a communication surface
+- admitting workflow nodes
+- tracking dependencies
+- materializing patterns into concrete tasks
+- routing documents between stores
+- running non-agent infrastructure steps
+- enforcing execution invariants
 
-### Stores
-- Managed document repositories
-- Formal communication boundary between tasks
-- Sidecar metadata persists lineage and timestamps
+### Labor
+Agents are responsible for:
 
-## 4. Agents
+- bounded reasoning over provided inputs
+- using approved tools when helpful
+- producing one raw-text output document per task
 
-Agents remain stateless workers.
+Agents do not own scheduling, persistence policy, or graph mutation semantics directly.
 
-They:
-- consume documents
+---
+
+## 3. Core Data Model
+
+### 3.1 Document
+The fundamental unit of work is the **Document**.
+
+A document consists of:
+
+- raw text content
+- metadata managed by the framework
+
+The content channel is plain text. The framework must not depend on agent output being encoded in JSON, Markdown envelopes, XML, or any other structured text protocol.
+
+### 3.2 Store
+A **Store** is a persistent collection of documents.
+
+Stores are first-class. They are not special-case implementation details. A workflow may use many stores with different roles, such as:
+
+- source stores
+- intermediate stores
+- analysis stores
+- report stores
+- control stores
+- scratch stores
+
+No fixed store taxonomy is required by the framework.
+
+### 3.3 Collection Semantics
+The framework treats stores and task outputs as collections.
+
+A collection may contain:
+- zero documents
+- one document
+- many documents
+
+Singleton inputs are not special. Patterns should operate uniformly over collections regardless of size.
+
+---
+
+## 4. Execution Model
+
+Orchestra executes a dependency graph of tasks.
+
+A workflow is authored in terms of high-level nodes. Those nodes may compile directly into executable tasks or may materialize into internal task subgraphs.
+
+The scheduler is responsible for:
+
+- determining task readiness
+- executing ready tasks
+- updating dependency counts
+- managing materialized subgraphs
+- ensuring that downstream tasks do not run until their true dependencies are satisfied
+
+The scheduler remains the authority over execution order.
+
+---
+
+## 5. Patterns
+
+Patterns are the primary abstraction for expressing work over collections.
+
+A pattern defines:
+- how inputs are enumerated
+- how many concrete tasks are created
+- whether agent work is applied
+- how outputs are persisted or collected
+
+Patterns should be generic and workflow-independent.
+
+### 5.1 Map
+`map` applies bounded work independently to each document in a collection.
+
+Semantics:
+- enumerate input documents
+- create one task per document
+- collect resulting outputs
+
+### 5.2 Transform
+`transform` is the semantic form of local document processing.
+
+Typical uses:
+- extraction
+- rewriting
+- classification
+- filtering
+- normalization
+- structured interpretation
+
+A transform step operates on one bounded input unit at a time.
+
+### 5.3 Chunk Map
+`chunk_map` is a framework-controlled expansion pattern.
+
+Semantics:
+- enumerate input documents
+- split them into bounded chunks
+- run one local task per chunk
+- collect or persist chunk outputs
+
+Chunking is part of orchestration because it changes graph structure and boundedness.
+
+### 5.4 Reduce
+`reduce` is the synthesis primitive.
+
+Semantics:
+- take a collection of documents
+- merge them pairwise
+- use a balanced binary reduction tree
+- carry odd singletons forward unchanged
+- continue until one root artifact remains
+
+Reduction is the only semantic merge primitive.
+
+---
+
+## 6. Pairwise Merge Invariant
+
+A central invariant of Orchestra is:
+
+**All semantic synthesis must be pairwise.**
+
+If an LLM is asked to merge several sibling documents in a single synthesis prompt, that is a framework error.
+
+This invariant exists to preserve:
+
+- bounded reasoning
+- synthesis quality
+- predictable merge topology
+- model portability
+- explicit provenance
+
+Balanced pairwise reduction is the only valid merge topology for semantic synthesis.
+
+---
+
+## 7. Raw Text Output Contract
+
+Each agent task produces exactly one raw-text output document.
+
+This has several consequences:
+
+- agents do not multiplex several artifacts into one response
+- agents do not choose canonical output filenames
+- output structure is determined by the graph, not by text formatting
+- multi-artifact workflows are expressed as multiple tasks or patterns
+
+The framework names, routes, and persists outputs. The model contributes text, not transport structure.
+
+---
+
+## 8. Persistence as a Workflow Boundary
+
+Stores are not merely caches. They are explicit workflow boundaries.
+
+Persisting results between stages provides:
+
+- inspectability
+- replayability
+- human intervention points
+- deterministic recovery
+- auditable intermediate artifacts
+
+A well-structured workflow may use several stores to mark distinct phases of work.
+
+Examples of generic phase boundaries include:
+- source acquisition
+- normalization
+- chunk generation
+- extraction
+- synthesis
+- reporting
+
+These are architectural roles, not fixed built-in store names.
+
+---
+
+## 9. Agent Role
+
+Agents are bounded workers.
+
+An agent may:
+- inspect its provided documents
 - use tools
-- produce one or more documents
+- return one raw-text output document
+- in some configurations, propose additional work through framework-approved mechanisms
 
-They do **not** know:
-- where they are in the workflow
-- what comes before or after
-- whether they were triggered by a map, reduce, or ordinary task
+An agent does not:
+- directly mutate scheduler queues
+- directly change dependency counters
+- directly author internal runtime artifacts
+- define persistence policy by formatting its output
 
-## 5. Pattern Expansion
+The framework remains responsible for graph semantics.
 
-Patterns are dynamic expansion primitives, not runtime control loops.
+---
 
-### Map
-A map node is materialized into:
-- one seed task per input document
-- one concrete agent task per document
-- one final collect task
+## 10. Non-Agent Work
 
-### Tree-Reduce
-A tree-reduce node is materialized into:
-- one seed task per input document
-- a balanced hierarchy of pairwise merge tasks
-- one final alias task
+Not all work should be delegated to an LLM.
 
-### Read/Write
-Read and write compile directly into concrete persistence tasks.
+The framework should own non-semantic infrastructure tasks such as:
 
-## 6. Dependency Semantics
+- downloading documents
+- chunking
+- persistence
+- basic routing
+- deterministic bookkeeping
 
-A task may begin only when:
-- all upstream dependencies completed successfully
-- all required inputs are present
+Agent work should be reserved for tasks that require judgment, interpretation, extraction, comparison, or synthesis.
 
-Dynamic pattern nodes initially appear as planner tasks. Once they materialize concrete work, downstream tasks are rewired to depend on the pattern's finalization task rather than the planner task itself.
+This keeps workflows stable and prevents accidental prompt-based simulation of infrastructure behavior.
 
-This allows:
-- fan-out
-- fan-in
-- dynamic task insertion
-- partial recomputation
-- future parallel execution
+---
 
-## 7. Temporal Grounding
+## 11. Boundedness
 
-Temporal grounding remains tool-based.
+Orchestra is built around bounded reasoning.
 
-Agents may call `get_context` to discover the current project reality rather than relying on pretraining-era assumptions.
+Every agent task should receive bounded input units. This may be achieved through:
 
-## 8. Execution Flow
+- collection-level fanout
+- chunking
+- filtering
+- pairwise reduction
 
-1. Load workflow spec
-2. Compile spec into initial tasks
-3. Seed scheduler with tasks that have no unmet dependencies
-4. When a materializer task becomes ready, expand it into concrete tasks
-5. Rewire pre-existing downstream dependencies to the materialized finalization task
-6. Execute ready concrete tasks
-7. Persist outputs and mark tasks complete
-8. Unlock downstream tasks
-9. Continue until all reachable tasks finish
+Boundedness is not a prompt convention. It is a framework responsibility.
+
+---
+
+## 12. Generic Workflow Shape
+
+Although Orchestra should remain independent of any specific workflow, many workflows naturally decompose into stages such as:
+
+1. acquire or discover source material
+2. normalize or filter it
+3. split it into bounded units if needed
+4. transform bounded units into extracted information
+5. judge sufficiency or coverage where required
+6. synthesize information pairwise
+7. write final artifacts
+
+This is not a required template, but it reflects the general design philosophy:
+**local work first, synthesis later, synthesis only pairwise.**
+
+---
+
+## 13. Dynamic Graph Growth
+
+The framework may support dynamic graph growth, but only through framework-controlled admission.
+
+If agents propose new work, the scheduler still owns:
+
+- validation
+- dependency integration
+- task admission
+- execution order
+
+This keeps graph growth explicit and inspectable.
+
+Dynamic execution should not bypass the framework’s invariants.
+
+---
+
+## 14. Internal Execution Artifacts
+
+High-level patterns may materialize into lower-level runtime artifacts, such as:
+
+- seed tasks
+- per-item agent tasks
+- per-chunk tasks
+- pairwise merge tasks
+- collection/finalization tasks
+- aliasing tasks
+
+These are internal execution details. They are framework-private and need not appear in user-authored workflows.
+
+The external model remains:
+- stores
+- patterns
+- dependencies
+- outputs
+
+---
+
+## 15. Design Commitments
+
+Orchestra is built around the following commitments:
+
+- stores are first-class collections
+- patterns operate over collections
+- singleton and multi-document inputs are treated uniformly
+- chunking is explicit
+- transform and reduce are distinct concerns
+- semantic synthesis is always pairwise
+- agent output remains raw text
+- orchestration owns routing, persistence, and boundedness
+
+This is the core design stance of the framework:
+
+**Collections are explicit, local work is bounded, and synthesis is strictly pairwise.**
